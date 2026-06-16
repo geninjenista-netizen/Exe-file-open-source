@@ -1,0 +1,11 @@
+[package]
+name = "host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+tokio = { version = "1", features = ["full"] }
+xcap = "0.2"
+image = "0.25"
+bincode = "1.3"
