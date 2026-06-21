@@ -1,77 +1,94 @@
 use tokio::net::TcpStream;
-use tokio::io::AsyncReadExt;
-use common::protocol::FramePacket;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use common::protocol::{FramePacket, InputPacket};
 use slint::{Image, SharedPixelBuffer, Rgba8Pixel};
+use tokio::sync::mpsc;
 
 slint::slint! {
     export component ViewerWindow inherits Window {
-        title: "Remote Presenter - Viewer";
+        title: "Remote Presenter";
         preferred-width: 1280px;
         preferred-height: 720px;
         background: black;
         
         in property <image> video_frame;
+        callback mouse-moved(float, float);
+        callback mouse-clicked();
 
         Image {
             source: root.video_frame;
-            width: 100%;
-            height: 100%;
+            width: 100%; height: 100%;
             image-fit: contain;
+        }
+
+        // Invisible touch layer that sits over the video
+        TouchArea {
+            width: 100%; height: 100%;
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    root.mouse-clicked();
+                }
+            }
+            moved => {
+                // Calculate percentage (0.0 to 1.0) and send to Rust logic
+                root.mouse-moved(self.mouse-x / self.width, self.mouse-y / self.height);
+            }
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
-    println!("--- Launching Remote Presenter Client UI ---");
-
     let ui = ViewerWindow::new().unwrap();
     let ui_handle = ui.as_weak();
 
+    // Create a communication channel between UI and Network
+    let (tx, mut rx) = mpsc::unbounded_channel::<InputPacket>();
+
+    let tx_move = tx.clone();
+    ui.on_mouse_moved(move |x, y| {
+        let _ = tx_move.send(InputPacket::MouseMove { x_percent: x, y_percent: y });
+    });
+
+    let tx_click = tx.clone();
+    ui.on_mouse_clicked(move || {
+        let _ = tx_click.send(InputPacket::MouseClick { button: 1 });
+    });
+
     tokio::spawn(async move {
-        println!("Connecting to Host at 127.0.0.1:8080...");
-        let mut socket = match TcpStream::connect("127.0.0.1:8080").await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to connect to host: {}", e);
-                return;
-            }
-        };
-        println!("Connected to Host machine pipeline successfully!");
+        let socket = TcpStream::connect("50.50.0.179:8080").await.unwrap();
+        let (mut read_half, mut write_half) = socket.into_split();
 
+        // Task to SEND inputs to host
+        tokio::spawn(async move {
+            while let Some(packet) = rx.recv().await {
+                if let Ok(bytes) = bincode::serialize(&packet) {
+                    let len = bytes.len() as u32;
+                    let _ = write_half.write_all(&len.to_be_bytes()).await;
+                    let _ = write_half.write_all(&bytes).await;
+                }
+            }
+        });
+
+        // Task to RECEIVE video from host
         loop {
-            let mut length_buffer = [0u8; 4];
-            if socket.read_exact(&mut length_buffer).await.is_err() {
-                println!("Host terminated the connection.");
-                break;
-            }
-            let packet_length = u32::from_be_bytes(length_buffer) as usize;
+            let mut len_buf = [0u8; 4];
+            if read_half.read_exact(&mut len_buf).await.is_err() { break; }
+            let len = u32::from_be_bytes(len_buf) as usize;
 
-            let mut frame_buffer = vec![0u8; packet_length];
-            if socket.read_exact(&mut frame_buffer).await.is_err() {
-                println!("Error losing packet data sync.");
-                break;
-            }
+            let mut frame_buf = vec![0u8; len];
+            if read_half.read_exact(&mut frame_buf).await.is_err() { break; }
 
-            if let Ok(FramePacket::VideoFrame(jpeg_data)) = bincode::deserialize(&frame_buffer) {
+            if let Ok(FramePacket::VideoFrame(jpeg_data)) = bincode::deserialize(&frame_buf) {
                 if let Ok(dynamic_image) = image::load_from_memory(&jpeg_data) {
                     let rgba_image = dynamic_image.into_rgba8();
-                    
-                    // 1. Create the thread-safe pixel buffer
                     let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                        rgba_image.as_raw(),
-                        rgba_image.width(),
-                        rgba_image.height(),
+                        rgba_image.as_raw(), rgba_image.width(), rgba_image.height(),
                     );
-
                     let ui_clone = ui_handle.clone();
-                    
-                    // 2. Move the raw buffer into the UI thread closure
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_clone.upgrade() {
-                            // 3. Create the Slint Image SAFELY on the Main UI thread
-                            let slint_image = Image::from_rgba8(buffer);
-                            ui.set_video_frame(slint_image);
+                            ui.set_video_frame(Image::from_rgba8(buffer));
                         }
                     });
                 }

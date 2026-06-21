@@ -17,4 +17,10 @@ pub mod protocol {
         // Holds the compressed image bytes of the screen/window
         VideoFrame(Vec<u8>),
     }
+
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    pub enum InputPacket {
+        MouseMove { x_percent: f32, y_percent: f32 },
+        MouseClick { button: u8 }, // 1 = Left Click
+    }
 }
