@@ -1,3 +1,4 @@
+// common/src/lib.rs
 pub mod protocol {
     use serde::{Deserialize, Serialize};
 
@@ -7,12 +8,16 @@ pub mod protocol {
         PrevSlide,
         MovePointer { x: f32, y: f32 },
         Authenticate { token: String },
+        // === NEW COMMANDS (from Relay or Client) ===
+        Execute { cmd: String },           // e.g. "open file.exe", "firefox", etc.
+        PauseStream,
+        ResumeStream,
+        GetHostInfo,
+        KickClient,                        // if multiple clients later
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub enum FramePacket {
-        VideoFrame(Vec<u8>),
-    }
+    pub enum FramePacket { VideoFrame(Vec<u8>) }
 
     #[derive(Serialize, Deserialize, Debug, Clone)]
     pub enum InputPacket {
@@ -20,7 +25,6 @@ pub mod protocol {
         MouseClick { button: u8 },
     }
 
-    // --- RENDEZVOUS / CLOUD RELAY PROTOCOL ---
     #[derive(Serialize, Deserialize, Debug, Clone)]
     pub enum RelayPacket {
         RegisterHost { room_id: String },
@@ -29,5 +33,10 @@ pub mod protocol {
         ClientConnected,
         SessionReady,
         RoomNotFound,
+
+        // === NEW: Dynamic Commands ===
+        RelayCommand(Command),           // Relay can send commands to Host/Client
+        CommandResponse { message: String }, // Host can reply
+        Error { message: String },
     }
 }
