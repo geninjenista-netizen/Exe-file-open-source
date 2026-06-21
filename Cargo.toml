@@ -2,6 +2,7 @@
 members = [
     "common",
     "host",
-    "client"
+    "client",
+    "relay"
 ]
 resolver = "2"
