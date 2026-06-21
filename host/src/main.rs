@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::thread::sleep;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use common::protocol::{FramePacket, InputPacket, RelayPacket};
+use common::protocol::{FramePacket, InputPacket, RelayPacket, Command};
 use image::DynamicImage;
 use std::process::Command as ProcessCommand;
 
@@ -83,8 +83,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut packet_buf = vec![0u8; len];
             if read_half.read_exact(&mut packet_buf).await.is_err() { break; }
 
+            // Try RelayPacket first (commands from Relay)
+            if let Ok(pkt) = bincode::deserialize::<RelayPacket>(&packet_buf) {
+                match pkt {
+                    RelayPacket::RelayCommand(cmd) => {
+                        match cmd {
+                            Command::Execute { cmd } => {
+                                println!("[HOST] Execute command requested: {}", cmd);
+                                let _ = ProcessCommand::new("sh").arg("-c").arg(&cmd).spawn();
+                            }
+                            _ => {
+                                println!("[HOST] RelayCommand received: {:?}", cmd);
+                            }
+                        }
+                        continue;
+                    }
+                    RelayPacket::CommandResponse { message } => {
+                        println!("[HOST] Relay response: {}", message);
+                        continue;
+                    }
+                    RelayPacket::Error { message } => {
+                        eprintln!("[HOST] Relay error: {}", message);
+                        continue;
+                    }
+                    _ => {
+                        // ignore other relay control packets here
+                        continue;
+                    }
+                }
+            }
+
+            // Fallback: Input packets (mouse, etc.)
             if let Ok(input) = bincode::deserialize::<InputPacket>(&packet_buf) {
                 let _ = input_tx.send(input);
+            } else {
+                // Unknown packet type
+                println!("[HOST] Received unknown packet type ({} bytes)", packet_buf.len());
             }
         }
     });
