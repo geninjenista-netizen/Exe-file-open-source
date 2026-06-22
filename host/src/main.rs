@@ -12,8 +12,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Launching Remote Presenter Host (Relay Mode) ---");
 
     let room_id = "555555".to_string();
-    println!("[HOST] Connecting to Relay Server at 165.245.178.149:6790...");
-    let mut socket = TcpStream::connect("165.245.178.149:6790").await?;
+    println!("[HOST] Connecting to Relay Server at 0.0.0.0:8081...");
+    let mut socket = TcpStream::connect("0.0.0.0:8081").await?;
 
     // 1. Send RegisterHost packet to Relay
     let register_pkt = RelayPacket::RegisterHost { room_id: room_id.clone() };

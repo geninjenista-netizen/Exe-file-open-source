@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use common::protocol::{FramePacket, InputPacket, RelayPacket};
@@ -41,7 +42,7 @@ slint::slint! {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let room_id = "555555".to_string();
     println!("[CLIENT] Connecting to Relay Server at 127.0.0.1:8081...");
-    let mut socket = TcpStream::connect("groundzero.atksrv.net:6790").await?;
+    let mut socket = TcpStream::connect("50.50.0.18:8081").await?;
 
     // 1. Request connection to Room
     let connect_pkt = RelayPacket::ConnectToHost { room_id: room_id.clone() };
@@ -84,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tx_click = tx.clone();
     ui.on_mouse_clicked(move || {
+        println!("[CLIENT] 🖱️ UI Click Registered! Pushing to wire...");
         let _ = tx_click.send(InputPacket::MouseClick { button: 1 });
     });
 

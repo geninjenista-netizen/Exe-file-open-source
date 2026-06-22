@@ -1,0 +1,49 @@
+name: Build Client (Windows & Linux)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Iski wajah se aap GitHub UI se button daba kar bhi build trigger kar paoge
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: remote-client-linux
+            bin_path: target/release/client
+          - os: windows-latest
+            artifact_name: remote-client-windows.exe
+            bin_path: target/release/client.exe
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # CRITICAL STEP: Linux ko Slint UI chalane ke liye C++ aur X11 headers chahiye hote hain
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libfontconfig1-dev
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Magic Cache: Pehli baar 8 min lagayega, agli baar se push pe 1.5 min me EXE de dega
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compile Release Binary
+        run: cargo build --release --bin client
+
+      - name: Upload Finished Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.bin_path }}
+          if-no-files-found: error
