@@ -1,4 +1,5 @@
 #![windows_subsystem = "windows"]
+
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use common::protocol::{FramePacket, InputPacket, RelayPacket};
@@ -6,7 +7,21 @@ use slint::{Image, SharedPixelBuffer, Rgba8Pixel};
 use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::fs::OpenOptions;
+use std::io::Write;
 
+// ==========================================
+// 🔴 THE FLIGHT RECORDER (SILENT LOGGING)
+// ==========================================
+fn log_debug(msg: &str) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("CLIENT_LOG.txt") {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
+
+// ==========================================
+// 🎨 SLINT GUI WINDOW DEFINITION
+// ==========================================
 slint::slint! {
     export component ViewerWindow inherits Window {
         title: "Remote Presenter Client";
@@ -38,11 +53,20 @@ slint::slint! {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+// ==========================================
+// 🚀 THE ACTUAL ENGINE (REAL MAIN)
+// ==========================================
+async fn real_main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = std::fs::remove_file("CLIENT_LOG.txt"); // Clean old log per launch
+    log_debug("==================================================");
+    log_debug("   🚀 REMOTE CLIENT LAUNCHED (FLIGHT RECORDER)    ");
+    log_debug("==================================================");
+
     let room_id = "555555".to_string();
-    println!("[CLIENT] Connecting to Relay Server at 127.0.0.1:8081...");
-    let mut socket = TcpStream::connect("50.50.0.18:8081").await?;
+    log_debug("[CLIENT] Attempting TCP Connection to Linux Host at 10.0.0.20:8081...");
+
+    let mut socket = TcpStream::connect("10.0.0.20:8081").await?;
+    log_debug("[CLIENT] Socket Connected! Transmitting Room Join Handshake...");
 
     // 1. Request connection to Room
     let connect_pkt = RelayPacket::ConnectToHost { room_id: room_id.clone() };
@@ -59,15 +83,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match bincode::deserialize::<RelayPacket>(&buf) {
         Ok(RelayPacket::SessionReady) => {
-            println!("\n[CLIENT] ⚡ SUCCESS! Connected to Host Room '{}'. Handing off stream to UI... ⚡\n", room_id);
+            log_debug(&format!("[CLIENT] ⚡ SUCCESS! Fused to Room '{}'. Spawning Slint GUI...", room_id));
         }
         Ok(RelayPacket::RoomNotFound) => {
-            eprintln!("[CLIENT Error]: Room ID '{}' does not exist or host is offline.", room_id);
-            return Ok(());
+            let err = format!("Room ID '{}' does not exist on Relay, or Host is offline.", room_id);
+            log_debug(&format!("[CLIENT ERROR] Handshake Rejected: {}", err));
+            return Err(err.into());
         }
         _ => {
-            eprintln!("[CLIENT Error]: Invalid relay response.");
-            return Ok(());
+            let err = "Received invalid packet structure during handshake.";
+            log_debug(&format!("[CLIENT ERROR] {}", err));
+            return Err(err.into());
         }
     }
 
@@ -85,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tx_click = tx.clone();
     ui.on_mouse_clicked(move || {
-        println!("[CLIENT] 🖱️ UI Click Registered! Pushing to wire...");
+        log_debug("[CLIENT] 🖱️ UI Left-Click Registered! Pushing MouseClick to wire...");
         let _ = tx_click.send(InputPacket::MouseClick { button: 1 });
     });
 
@@ -97,7 +123,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             let mut coord = None;
             if let Ok(mut pos) = throttler_pos.lock() { coord = pos.take(); }
-            if let Some((x, y)) = coord { let _ = tx_move.send(InputPacket::MouseMove { x_percent: x, y_percent: y }); }
+            if let Some((x, y)) = coord {
+                let _ = tx_move.send(InputPacket::MouseMove { x_percent: x, y_percent: y });
+            }
         }
     });
 
@@ -107,8 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(packet) = rx.recv().await {
             if let Ok(bytes) = bincode::serialize(&packet) {
                 let len = bytes.len() as u32;
-                let _ = write_half.write_all(&len.to_be_bytes()).await;
-                let _ = write_half.write_all(&bytes).await;
+                if write_half.write_all(&len.to_be_bytes()).await.is_err() { break; }
+                if write_half.write_all(&bytes).await.is_err() { break; }
             }
         }
     });
@@ -116,11 +144,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         loop {
             let mut len_buf = [0u8; 4];
-            if read_half.read_exact(&mut len_buf).await.is_err() { break; }
+            if read_half.read_exact(&mut len_buf).await.is_err() {
+                log_debug("[CLIENT WARN] Stream severed by Relay / Host.");
+                break;
+            }
             let len = u32::from_be_bytes(len_buf) as usize;
 
             let mut frame_buf = vec![0u8; len];
-            if read_half.read_exact(&mut frame_buf).await.is_err() { break; }
+            if read_half.read_exact(&mut frame_buf).await.is_err() {
+                log_debug("[CLIENT WARN] Failed to read complete frame payload.");
+                break;
+            }
 
             if let Ok(FramePacket::VideoFrame(jpeg_data)) = bincode::deserialize(&frame_buf) {
                 if let Ok(dynamic_image) = image::load_from_memory(&jpeg_data) {
@@ -130,13 +164,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     let ui_clone = ui_handle.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(ui) = ui_clone.upgrade() { ui.set_video_frame(Image::from_rgba8(buffer)); }
+                        if let Some(ui) = ui_clone.upgrade() {
+                            ui.set_video_frame(Image::from_rgba8(buffer));
+                        }
                     });
                 }
             }
         }
     });
 
+    log_debug("[CLIENT] Slint Engine running desktop window...");
     ui.run()?;
+    log_debug("[CLIENT] UI Window closed cleanly by user.");
     Ok(())
+}
+
+// ==========================================
+// 🛡️ THE MASTER CRASH TRAP (OUTER MAIN)
+// ==========================================
+#[tokio::main]
+async fn main() {
+    // Trap A: Catch standard panics
+    std::panic::set_hook(Box::new(|panic_info| {
+        let msg = format!("💥 RUST FATAL PANIC:\n{}", panic_info);
+        log_debug(&msg);
+        let _ = std::fs::write("CRASH_PANIC.txt", msg);
+    }));
+
+    // Trap B: Catch network connection rejections
+    if let Err(e) = real_main().await {
+        let msg = format!("❌ CLIENT TERMINATED WITH ERROR:\n{}", e);
+        log_debug(&msg);
+        let _ = std::fs::write("CRASH_NETWORK.txt", msg);
+    }
 }
