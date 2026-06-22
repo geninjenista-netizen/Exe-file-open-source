@@ -63,9 +63,9 @@ async fn real_main() -> Result<(), Box<dyn std::error::Error>> {
     log_debug("==================================================");
 
     let room_id = "555555".to_string();
-    log_debug("[CLIENT] Attempting TCP Connection to Linux Host at 10.0.0.20:8081...");
+    log_debug("[CLIENT] Attempting TCP Connection to Linux Host at 50.50.0.18:8081...");
 
-    let mut socket = TcpStream::connect("10.0.0.20:8081").await?;
+    let mut socket = TcpStream::connect("50.50.0.18:8081").await?;
     log_debug("[CLIENT] Socket Connected! Transmitting Room Join Handshake...");
 
     // 1. Request connection to Room
